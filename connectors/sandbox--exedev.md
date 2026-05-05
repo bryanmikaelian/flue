@@ -1,12 +1,16 @@
 ---
-{ "category": "sandbox", "website": "https://exe.dev" }
+{
+  "category": "sandbox",
+  "website": "https://exe.dev",
+  "aliases": ["ssh2"]
+}
 ---
 
 # Add a Flue Connector: exe.dev
 
 You are an AI coding agent installing the exe.dev sandbox connector for a
-Flue project. Follow the steps. Confirm with the user only on genuine
-ambiguity.
+Flue project. Follow these instructions exactly. Confirm with the user only
+when something is genuinely ambiguous (e.g. an unusual project layout).
 
 ## What this connector does
 
@@ -24,7 +28,8 @@ sleep needed in your agent code.
 
 ## Choose a mode
 
-Ask the user which one. Default to **Existing VM**.
+Choose a mode based on the user's request. If they don't specify one, use
+**Existing VM**.
 
 | Mode            | Option             | Use when                                               |
 | --------------- | ------------------ | ------------------------------------------------------ |
@@ -339,6 +344,16 @@ async function apiDeleteVm(token: string, name: string): Promise<void> {
 /** Escape a string for safe use inside single-quoted shell args. */
 function shellEscape(s: string): string {
   return s.replace(/'/g, "'\\''");
+}
+
+const SHELL_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Build a shell-safe environment assignment for SSH exec. */
+function shellEnvAssignment(name: string, value: string): string {
+  if (!SHELL_ENV_NAME.test(name)) {
+    throw new ExeDevError(`Invalid environment variable name: ${name}`);
+  }
+  return `${name}='${shellEscape(value)}'`;
 }
 
 /**
@@ -721,7 +736,7 @@ export class ExeDevSandboxApi implements SandboxApi {
 
     if (options?.env && Object.keys(options.env).length > 0) {
       const envPrefix = Object.entries(options.env)
-        .map(([k, v]) => `export ${k}='${shellEscape(v)}'`)
+        .map(([k, v]) => `export ${shellEnvAssignment(k, v)}`)
         .join("; ");
       cmd = `${envPrefix}; ${cmd}`;
     }
@@ -743,10 +758,10 @@ export class ExeDevSandboxApi implements SandboxApi {
             stream.close();
             resolve({
               stdout,
-              stderr: stderr + "\n[exedev] command timed out",
+              stderr: `${stderr}\n[flue:exedev] Command timed out after ${options.timeout} seconds.`,
               exitCode: 124,
             });
-          }, options.timeout);
+          }, options.timeout * 1000);
         }
 
         stream.on("data", (data: Buffer) => {
@@ -908,14 +923,18 @@ export function exedev(options: ExeDevConnectorOptions): SandboxFactory {
 }
 ```
 
-## Install dependencies
+## Required dependencies
+
+This connector imports from `ssh2`, so the user's project needs to depend on
+it directly. If their `package.json` does not already list it, add it:
 
 ```bash
 npm install ssh2
 npm install -D @types/ssh2
 ```
 
-Use the user's package manager (`pnpm`, `yarn`, etc.) per their lockfile.
+(Use the user's package manager — `pnpm add`, `yarn add`, etc. if their
+lockfile indicates a different one.)
 
 ## Authentication
 
@@ -955,7 +974,12 @@ above when you need lifecycle management.
 
 Never invent a token value. It must come from the user.
 
-## Wiring
+## Wiring it into an agent
+
+Here's what using this connector looks like inside a Flue agent. If the
+user is already working on an agent that this connector is meant to plug
+into, you can finish that work by wiring the connector into it. Otherwise,
+share the relevant snippet so they can wire it up themselves.
 
 ### Existing VM
 
@@ -1034,8 +1058,17 @@ const agent = await init({
 Place vars per project conventions (`.env`, `.dev.vars`, `AGENTS.md`).
 Ask if unclear.
 
+For reference: `flue dev --env <file>` and `flue run --env <file>` load
+any `.env`-format file the user points them at.
+
 ## Verify
 
-1. `npx tsc --noEmit` — no type errors
-2. `ssh user@<vm-host> echo hello` — SSH works
-3. Tell the user: deps installed, env set, run `flue dev` or `flue run <agent>`
+1. Run the user's typechecker (`npx tsc --noEmit` is a safe default) and
+   confirm the new file has no errors.
+2. Confirm `ssh user@<vm-host> echo hello` works for existing-VM mode.
+3. Confirm the import path you used for the connector matches where you
+   actually wrote the file.
+4. Tell the user the next steps: install `ssh2` and `@types/ssh2` (if you
+   didn't), make sure the needed exe.dev SSH/API values are available at
+   runtime (per the Authentication section above), and run `flue dev` (or
+   `flue run <agent>`) to try it.
